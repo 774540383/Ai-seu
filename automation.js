@@ -21,130 +21,61 @@ export class SEUAutomation {
     let extractedData = { banner: {}, blackboard: {} };
 
     try {
-      // ----- 1. تسجيل الدخول إلى SSO (نفس الطريقة السابقة) -----
-      console.log("⚡ جاري فتح بوابة الدخول الموحد...");
-      await page.goto('https://sso.seu.edu.sa', { waitUntil: 'domcontentloaded', timeout: 60000 });
+      // ----- 1. الدخول إلى Blackboard مباشرة -----
+      console.log("⚡ جاري فتح Blackboard...");
+      await page.goto('https://lms.seu.edu.sa', { waitUntil: 'domcontentloaded', timeout: 60000 });
 
-      await page.waitForFunction(
-        () => {
-          const inputs = Array.from(document.querySelectorAll('input'));
-          return inputs.some(inp => inp.offsetParent !== null && inp.type !== 'hidden');
-        },
-        { timeout: 60000 }
-      );
+      // ----- 2. انتظر حتى يتم التوجيه إلى SSO -----
+      console.log("⏳ جاري انتظار التوجيه إلى SSO...");
+      await page.waitForURL(/sso\.seu\.edu\.sa/, { timeout: 60000 });
+      console.log("✅ تم التوجيه إلى SSO");
 
-      const selectors = await page.evaluate(() => {
-        const allInputs = Array.from(document.querySelectorAll('input'));
-        const visible = allInputs.filter(inp => inp.offsetParent !== null && inp.type !== 'hidden');
-        let usernameSel = null;
-        let passwordSel = null;
+      // ----- 3. تسجيل الدخول في SSO -----
+      console.log("⚡ جاري تسجيل الدخول...");
+      await page.waitForSelector('#usernameUserInput, #username, input[name="username"]', { state: 'visible', timeout: 60000 });
+      await page.fill('#usernameUserInput', this.username);
+      await page.fill('#password', this.password);
 
-        const textInput = visible.find(inp => inp.type === 'text' || inp.type === 'email' || inp.type === 'tel');
-        if (textInput) {
-          usernameSel = textInput.id ? `#${textInput.id}` : `[name="${textInput.name}"]`;
-        }
-        const passInput = visible.find(inp => inp.type === 'password');
-        if (passInput) {
-          passwordSel = passInput.id ? `#${passInput.id}` : `[name="${passInput.name}"]`;
-        }
-
-        if (!usernameSel) {
-          const keywords = ['user', 'email', 'login', 'username', 'uid', 'mail'];
-          for (const inp of visible) {
-            if (inp.type === 'password') continue;
-            const attrs = [inp.name, inp.id, inp.placeholder, inp.className].join(' ').toLowerCase();
-            if (keywords.some(kw => attrs.includes(kw))) {
-              usernameSel = inp.id ? `#${inp.id}` : `[name="${inp.name}"]`;
-              break;
-            }
-          }
-        }
-        return { usernameSel, passwordSel };
-      });
-
-      console.log("🔍 المحددات المكتشفة:", selectors);
-
-      if (!selectors.usernameSel || !selectors.passwordSel) {
-        throw new Error('لم يتم العثور على حقول الدخول المرئية.');
+      const submitBtn = await page.$('button[type="submit"]');
+      if (submitBtn) {
+        await submitBtn.click();
+      } else {
+        // محاولة بديلة
+        await page.press('#password', 'Enter');
       }
 
-      await page.fill(selectors.usernameSel, this.username);
-      await page.fill(selectors.passwordSel, this.password);
+      // ----- 4. انتظر العودة إلى Blackboard -----
+      console.log("⏳ جاري انتظار العودة إلى Blackboard...");
+      await page.waitForURL(/lms\.seu\.edu\.sa/, { timeout: 60000 });
+      console.log("✅ تم العودة إلى Blackboard");
 
-      let submitBtn = await page.$('button[type="submit"]');
-      if (!submitBtn) submitBtn = await page.$('input[type="submit"]');
-      if (!submitBtn) {
-        const btn = await page.$('button:has-text("تسجيل"), button:has-text("دخول"), button:has-text("Login"), button:has-text("Sign In")');
-        if (btn) submitBtn = btn;
-        else throw new Error('لم يتم العثور على زر الدخول');
-      }
-
-      await submitBtn.click();
-      await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 60000 });
-      console.log("✅ تم تسجيل الدخول بنجاح إلى SSO");
-
-      // ----- 2. حفظ حالة الجلسة (storageState) -----
-      // هذه هي النقطة الأساسية: نخزن كل الكوكيز والتخزين المحلي لاستخدامها لاحقاً
-      const storageState = await context.storageState();
-      console.log("💾 تم حفظ حالة الجلسة بنجاح");
-
-      // ----- 3. جلب بيانات البانر (نستخدم نفس السياق) -----
-      console.log("⚡ جاري سحب بيانات البانر...");
-      await page.goto('https://bannservices.seu.edu.sa/StudentRegistrationSsb/ssb/registration', {
-        waitUntil: 'domcontentloaded',
-        timeout: 60000
-      });
+      // ----- 5. انتظر تحميل الصفحة -----
       await page.waitForTimeout(5000);
 
-      const bannerData = await page.evaluate(() => {
-        const gpaElem = document.querySelector('.gpa-display, .gpa-value, .grade-point-average');
-        const gpa = gpaElem ? gpaElem.innerText.trim() : 'N/A';
-        const nameElem = document.querySelector('.user-name, .student-name');
-        return {
-          gpa,
-          academicStatus: 'مستمر',
-          name: nameElem?.innerText?.trim() || 'طالب'
-        };
-      });
-      extractedData.banner = bannerData;
+      // ----- 6. جلب المقررات -----
+      console.log("⚡ جاري سحب المقررات...");
+      let courses = [];
 
-      // ----- 4. الوصول إلى Blackboard (طريقة مختلفة) -----
-      console.log("⚡ جاري فتح Blackboard باستخدام الجلسة المحفوظة...");
+      try {
+        // محاولة البحث عن عناصر المقررات
+        await page.waitForSelector('.course-title, .course-element-title, h4, .course-name', { timeout: 30000 });
+        courses = await page.evaluate(() => {
+          const titles = Array.from(document.querySelectorAll('.course-title, .course-element-title, h4, .course-name'));
+          return titles.map(el => el.innerText.trim()).filter(text => text.length > 0);
+        });
+      } catch (e) {
+        console.log("⚠️ لم يتم العثور على عناصر المقررات، محاولة قراءة النص...");
+        courses = await page.evaluate(() => {
+          const allText = document.body.innerText;
+          const lines = allText.split('\n').filter(line => line.trim().length > 0);
+          return lines.slice(0, 10);
+        });
+      }
 
-      // **الخطوة المهمة**: نغلق الصفحة الحالية ونفتح صفحة جديدة بنفس السياق
-      // هذا يضمن أن المتصفح يحمل الجلسة دون أي تداخل
-      await page.close();
-      const newPage = await context.newPage();
-
-      // نذهب مباشرة إلى Blackboard
-      await newPage.goto('https://lms.seu.edu.sa/webapps/ultra/', {
-        waitUntil: 'domcontentloaded',
-        timeout: 60000
-      });
-
-      // **الخطوة الذكية**: بدلاً من انتظار عنصر معين، ننتظر حتى يختفي عنوان SSO من الرابط
-      // هذا يضمن أن عملية SAML قد اكتملت
-      await newPage.waitForFunction(
-        () => !window.location.href.includes('sso.seu.edu.sa'),
-        { timeout: 60000 }
-      );
-
-      // الآن أصبحنا في Blackboard، ننتظر تحميل العناصر
-      await newPage.waitForSelector('a[js-route="courses"], a:has-text("Courses"), a:has-text("المقررات")', {
-        state: 'visible',
-        timeout: 60000
-      });
-      await newPage.click('a[js-route="courses"], a:has-text("Courses"), a:has-text("المقررات")');
-      await newPage.waitForTimeout(5000);
-
-      const courses = await newPage.evaluate(() => {
-        const titles = Array.from(document.querySelectorAll('.course-title, .course-element-title, h4, .course-name'));
-        return titles.map(el => el.innerText.trim()).filter(text => text.length > 0);
-      });
-
+      // ----- 7. جلب الواجبات (محاولة) -----
       let assignments = [];
       try {
-        assignments = await newPage.evaluate(async () => {
+        assignments = await page.evaluate(async () => {
           const res = await fetch('/learn/api/v1/users/me/grades');
           const data = await res.json();
           return data.results?.map(g => ({ title: g.name, dueDate: g.dueDate })) || [];
@@ -154,10 +85,31 @@ export class SEUAutomation {
       }
 
       extractedData.blackboard = {
-        courses: courses.length ? courses : ["لا توجد مقررات مسجلة"],
+        courses: courses.length ? courses : ["تم تسجيل الدخول بنجاح، ولكن لم يتم العثور على مقررات"],
         assignments,
         announcements: ["مرحباً بكم في الفصل الدراسي الجديد"]
       };
+
+      // ----- 8. محاولة جلب بيانات البانر (اختياري) -----
+      // سيتم تجاهل فشل البانر، لأننا نركز على Blackboard
+      try {
+        console.log("⚡ محاولة جلب بيانات البانر...");
+        await page.goto('https://bannservices.seu.edu.sa/StudentRegistrationSsb/ssb/registration', {
+          waitUntil: 'domcontentloaded',
+          timeout: 30000
+        });
+        await page.waitForTimeout(3000);
+
+        const bannerData = await page.evaluate(() => {
+          const gpaElem = document.querySelector('.gpa-display, .gpa-value');
+          const gpa = gpaElem ? gpaElem.innerText.trim() : 'N/A';
+          return { gpa, academicStatus: 'مستمر', name: 'طالب' };
+        });
+        extractedData.banner = bannerData;
+      } catch (e) {
+        console.log("⚠️ تعذر جلب بيانات البانر، سيتم استخدام بيانات افتراضية.");
+        extractedData.banner = { gpa: 'N/A', academicStatus: 'غير معروف', name: 'طالب' };
+      }
 
       console.log("✅ تم استخراج البيانات بنجاح.");
     } catch (err) {
@@ -165,6 +117,8 @@ export class SEUAutomation {
       try {
         const url = page.url();
         console.log("📌 الصفحة الحالية:", url);
+        const content = await page.content();
+        console.log("📄 جزء من محتوى الصفحة:", content.substring(0, 500));
       } catch (e) { /* تجاهل */ }
       throw err;
     } finally {
