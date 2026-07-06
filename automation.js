@@ -9,7 +9,7 @@ export class SEUAutomation {
   async executeSync() {
     const browser = await chromium.launch({
       headless: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+      args: ['--no-sandbox', '--disable-setuid-sandbox']
     });
 
     const context = await browser.newContext({
@@ -21,11 +21,10 @@ export class SEUAutomation {
     let extractedData = { banner: {}, blackboard: {} };
 
     try {
-      // ---- الخطوة 1: تسجيل الدخول إلى SSO ----
+      // ----- 1. تسجيل الدخول إلى SSO (نفس الطريقة السابقة) -----
       console.log("⚡ جاري فتح بوابة الدخول الموحد...");
       await page.goto('https://sso.seu.edu.sa', { waitUntil: 'domcontentloaded', timeout: 60000 });
 
-      // اكتشاف الحقول المرئية
       await page.waitForFunction(
         () => {
           const inputs = Array.from(document.querySelectorAll('input'));
@@ -84,7 +83,12 @@ export class SEUAutomation {
       await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 60000 });
       console.log("✅ تم تسجيل الدخول بنجاح إلى SSO");
 
-      // ---- الخطوة 2: جلب بيانات البانر (نفس السياق) ----
+      // ----- 2. حفظ حالة الجلسة (storageState) -----
+      // هذه هي النقطة الأساسية: نخزن كل الكوكيز والتخزين المحلي لاستخدامها لاحقاً
+      const storageState = await context.storageState();
+      console.log("💾 تم حفظ حالة الجلسة بنجاح");
+
+      // ----- 3. جلب بيانات البانر (نستخدم نفس السياق) -----
       console.log("⚡ جاري سحب بيانات البانر...");
       await page.goto('https://bannservices.seu.edu.sa/StudentRegistrationSsb/ssb/registration', {
         waitUntil: 'domcontentloaded',
@@ -104,52 +108,43 @@ export class SEUAutomation {
       });
       extractedData.banner = bannerData;
 
-      // ---- الخطوة 3: جلب بيانات Blackboard (نفس السياق، بدون إغلاق) ----
-      console.log("⚡ جاري فتح Blackboard وسحب المقررات...");
+      // ----- 4. الوصول إلى Blackboard (طريقة مختلفة) -----
+      console.log("⚡ جاري فتح Blackboard باستخدام الجلسة المحفوظة...");
 
-      // نذهب مباشرة إلى Blackboard (سيتم إعادة التوجيه عبر SAML، ولكن السياق يحمل الجلسة)
-      await page.goto('https://lms.seu.edu.sa/webapps/ultra/', {
+      // **الخطوة المهمة**: نغلق الصفحة الحالية ونفتح صفحة جديدة بنفس السياق
+      // هذا يضمن أن المتصفح يحمل الجلسة دون أي تداخل
+      await page.close();
+      const newPage = await context.newPage();
+
+      // نذهب مباشرة إلى Blackboard
+      await newPage.goto('https://lms.seu.edu.sa/webapps/ultra/', {
         waitUntil: 'domcontentloaded',
         timeout: 60000
       });
 
-      // قد يتم إعادة التوجيه إلى SSO مرة أخرى، ولكن الجلسة موجودة، لذا سيعود تلقائياً
-      // ننتظر حتى يتم التوجيه الكامل
-      await page.waitForTimeout(5000);
+      // **الخطوة الذكية**: بدلاً من انتظار عنصر معين، ننتظر حتى يختفي عنوان SSO من الرابط
+      // هذا يضمن أن عملية SAML قد اكتملت
+      await newPage.waitForFunction(
+        () => !window.location.href.includes('sso.seu.edu.sa'),
+        { timeout: 60000 }
+      );
 
-      // إذا كنا لا نزال في صفحة SSO، فهذا يعني أن الجلسة لم تنتقل، نضغط على "تسجيل الدخول" مرة أخرى (زر مخفي)
-      const currentUrl = page.url();
-      if (currentUrl.includes('sso.seu.edu.sa')) {
-        console.log("⚠️ تم إعادة التوجيه إلى SSO، نحاول تسجيل الدخول مرة أخرى...");
-        // قد يكون هناك زر "تسجيل الدخول" أو form يتم إرساله تلقائياً
-        // نبحث عن أي زر submit ونضغط عليه
-        const retryBtn = await page.$('button[type="submit"], input[type="submit"]');
-        if (retryBtn) {
-          await retryBtn.click();
-          await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 60000 });
-        } else {
-          // قد يكون النموذج يُرسل تلقائياً عبر JavaScript، ننتظر قليلاً
-          await page.waitForTimeout(5000);
-        }
-      }
-
-      // الآن يجب أن نكون في Blackboard
-      // ننتظر ظهور رابط المقررات
-      await page.waitForSelector('a[js-route="courses"], a:has-text("Courses"), a:has-text("المقررات")', {
+      // الآن أصبحنا في Blackboard، ننتظر تحميل العناصر
+      await newPage.waitForSelector('a[js-route="courses"], a:has-text("Courses"), a:has-text("المقررات")', {
         state: 'visible',
         timeout: 60000
       });
-      await page.click('a[js-route="courses"], a:has-text("Courses"), a:has-text("المقررات")');
-      await page.waitForTimeout(5000);
+      await newPage.click('a[js-route="courses"], a:has-text("Courses"), a:has-text("المقررات")');
+      await newPage.waitForTimeout(5000);
 
-      const courses = await page.evaluate(() => {
+      const courses = await newPage.evaluate(() => {
         const titles = Array.from(document.querySelectorAll('.course-title, .course-element-title, h4, .course-name'));
         return titles.map(el => el.innerText.trim()).filter(text => text.length > 0);
       });
 
       let assignments = [];
       try {
-        assignments = await page.evaluate(async () => {
+        assignments = await newPage.evaluate(async () => {
           const res = await fetch('/learn/api/v1/users/me/grades');
           const data = await res.json();
           return data.results?.map(g => ({ title: g.name, dueDate: g.dueDate })) || [];
