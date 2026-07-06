@@ -22,23 +22,23 @@ export class SEUAutomation {
     try {
       console.log("⚡ جاري فتح بوابة الدخول الموحد...");
 
-      // استخدام 'load' بدلاً من 'networkidle' لتجنب المشاكل
+      // 1. انتقل إلى SSO وانتظر تحميل الصفحة الأساسية
       await page.goto('https://sso.seu.edu.sa', { waitUntil: 'load', timeout: 60000 });
 
-      // الانتظار حتى يصبح حقل username مرئياً (وليس مجرد موجود في DOM)
-      await page.waitForSelector('#username, input[name="username"]', {
+      // 2. انتظر ظهور حقل اسم المستخدم المرئي (وليس المخفي)
+      await page.waitForSelector('input[name="username"]:not([type="hidden"])', {
         state: 'visible',
         timeout: 60000
       });
 
-      // إدخال البيانات
-      await page.fill('#username', this.username);
-      await page.fill('#password', this.password);
+      // 3. املأ البيانات باستخدام المحدد الذي يستبعد العناصر المخفية
+      await page.fill('input[name="username"]:not([type="hidden"])', this.username);
+      await page.fill('input[name="password"]:not([type="hidden"])', this.password);
 
-      // النقر على زر الدخول
+      // 4. اضغط على زر الدخول
       await page.click('button[type="submit"], input[type="submit"]');
 
-      // الانتظار حتى يتم التوجيه بعد تسجيل الدخول
+      // 5. انتظر التوجيه بعد تسجيل الدخول
       await page.waitForNavigation({ waitUntil: 'load', timeout: 60000 });
 
       console.log("✅ تم تسجيل الدخول بنجاح");
@@ -49,7 +49,6 @@ export class SEUAutomation {
         waitUntil: 'load',
         timeout: 60000
       });
-      // انتظار تحميل الصفحة
       await page.waitForTimeout(5000);
 
       const bannerData = await page.evaluate(() => {
