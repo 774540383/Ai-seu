@@ -7,7 +7,6 @@ export class SEUAutomation {
     }
 
     async executeSync() {
-        // 1. تشغيل المتصفح
         const browser = await chromium.launch({
             headless: true,
             args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
@@ -20,49 +19,38 @@ export class SEUAutomation {
 
         const page = await context.newPage();
 
-        // هيكل تخزين البيانات
+        // متغيرات لتخزين البيانات المستخرجة
         let extractedData = {
-            banner: { name: null, gpa: null, academicStatus: null, studentId: null, college: null, major: null },
+            banner: { name: null, gpa: null, academicStatus: null },
             blackboard: { courses: [], assignments: [], announcements: [] }
         };
 
         // متغيرات لالتقاط الـ API Responses
-        let bbCourses = null;
+        let bbMemberships = null;
         let bbGrades = null;
         let bbProfile = null;
 
         try {
             // ============================================================
-            // الخطوة 1: اعتراض طلبات Blackboard REST API
+            // الخطوة 1: إعداد اعتراض الطلبات (باستخدام waitForResponse بدلاً من route)
             // ============================================================
             console.log("⚡ جاري تجهيز مراقبة طلبات Blackboard API...");
 
-            // 1.1 اعتراض /learn/api/v1/users/me/memberships (المقررات المسجلة)
-            await page.route('**/learn/api/v1/users/me/memberships**', async route => {
-                const response = await route.fetch();
-                const body = await response.json();
-                bbCourses = body;
-                console.log(`✅ تم اعتراض المقررات: ${body.results?.length || 0} مقرر`);
-                await route.continue();
-            });
+            // إنشاء وعود للانتظار حتى اكتمال الطلبات
+            const membershipsPromise = page.waitForResponse(
+                response => response.url().includes('/learn/api/v1/users/me/memberships') && response.status() === 200,
+                { timeout: 30000 }
+            );
 
-            // 1.2 اعتراض /learn/api/v1/users/me/grades (الدرجات والواجبات)
-            await page.route('**/learn/api/v1/users/me/grades**', async route => {
-                const response = await route.fetch();
-                const body = await response.json();
-                bbGrades = body;
-                console.log(`✅ تم اعتراض الدرجات: ${body.results?.length || 0} درجة`);
-                await route.continue();
-            });
+            const gradesPromise = page.waitForResponse(
+                response => response.url().includes('/learn/api/v1/users/me/grades') && response.status() === 200,
+                { timeout: 30000 }
+            );
 
-            // 1.3 اعتراض /learn/api/v1/users/me (الملف الشخصي)
-            await page.route('**/learn/api/v1/users/me**', async route => {
-                const response = await route.fetch();
-                const body = await response.json();
-                bbProfile = body;
-                console.log(`✅ تم اعتراض الملف الشخصي: ${body.userName || ''}`);
-                await route.continue();
-            });
+            const profilePromise = page.waitForResponse(
+                response => response.url().includes('/learn/api/v1/users/me') && !response.url().includes('memberships') && !response.url().includes('grades'),
+                { timeout: 30000 }
+            );
 
             // ============================================================
             // الخطوة 2: تسجيل الدخول عبر Blackboard (التوجيه إلى SSO)
@@ -72,15 +60,12 @@ export class SEUAutomation {
             await page.waitForURL(/sso\.seu\.edu\.sa/, { timeout: 60000 });
             console.log("✅ تم التوجيه إلى SSO.");
 
-            // انتظار ظهور حقول الدخول
             await page.waitForSelector('#usernameUserInput, #username, input[name="username"]', { state: 'visible', timeout: 60000 });
             console.log("✅ تم العثور على حقول الدخول.");
 
-            // تعبئة البيانات
             await page.fill('#usernameUserInput', this.username);
             await page.fill('#password', this.password);
 
-            // الضغط على زر الدخول
             const submitBtn = await page.$('button[type="submit"]');
             if (submitBtn) {
                 await submitBtn.click();
@@ -88,17 +73,16 @@ export class SEUAutomation {
                 await page.press('#password', 'Enter');
             }
 
-            // انتظار العودة إلى Blackboard
             await page.waitForURL(/lms\.seu\.edu\.sa/, { timeout: 60000 });
             console.log("✅ تم العودة إلى Blackboard.");
 
+            // انتظار تحميل الصفحة الرئيسية
+            await page.waitForTimeout(5000);
+
             // ============================================================
-            // الخطوة 3: تحفيز طلبات Blackboard API بالتنقل في الصفحة
+            // الخطوة 3: التنقل لتحفيز طلبات API
             // ============================================================
             console.log("⚡ جاري التنقل لتحفيز جلب البيانات...");
-            
-            // انتظار تحميل الصفحة الرئيسية
-            await page.waitForTimeout(3000);
 
             // محاولة النقر على "Courses" لتحفيز طلب المقررات
             try {
@@ -106,10 +90,10 @@ export class SEUAutomation {
                 if (coursesLink) {
                     await coursesLink.click();
                     console.log("✅ تم النقر على رابط المقررات.");
-                    await page.waitForTimeout(5000);
+                    await page.waitForTimeout(3000);
                 }
             } catch (e) {
-                console.log("⚠️ تعذر النقر على رابط المقررات، قد تكون البيانات محملة بالفعل.");
+                console.log("⚠️ تعذر النقر على رابط المقررات.");
             }
 
             // محاولة النقر على "Grades" لتحفيز طلب الدرجات
@@ -118,7 +102,7 @@ export class SEUAutomation {
                 if (gradesLink) {
                     await gradesLink.click();
                     console.log("✅ تم النقر على رابط الدرجات.");
-                    await page.waitForTimeout(5000);
+                    await page.waitForTimeout(3000);
                 }
             } catch (e) {
                 console.log("⚠️ تعذر النقر على رابط الدرجات.");
@@ -129,26 +113,54 @@ export class SEUAutomation {
             await page.waitForTimeout(3000);
 
             // ============================================================
-            // الخطوة 4: استخراج بيانات Blackboard من Responses المعترضة
+            // الخطوة 4: انتظار اكتمال طلبات API
+            // ============================================================
+            console.log("⏳ جاري انتظار اكتمال طلبات الـ API...");
+
+            // انتظار جميع الطلبات الثلاثة
+            const [membershipsResponse, gradesResponse, profileResponse] = await Promise.all([
+                membershipsPromise,
+                gradesPromise,
+                profilePromise
+            ]);
+
+            // استخراج البيانات من الاستجابات
+            if (membershipsResponse) {
+                bbMemberships = await membershipsResponse.json();
+                console.log(`✅ تم جلب المقررات: ${bbMemberships.results?.length || 0} مقرر`);
+            }
+
+            if (gradesResponse) {
+                bbGrades = await gradesResponse.json();
+                console.log(`✅ تم جلب الدرجات: ${bbGrades.results?.length || 0} درجة`);
+            }
+
+            if (profileResponse) {
+                bbProfile = await profileResponse.json();
+                console.log(`✅ تم جلب الملف الشخصي: ${bbProfile.userName || ''}`);
+            }
+
+            // ============================================================
+            // الخطوة 5: استخراج بيانات Blackboard
             // ============================================================
             console.log("⚡ جاري استخراج بيانات Blackboard...");
 
-            // 4.1 استخراج المقررات من memberships
-            if (bbCourses && bbCourses.results) {
-                const courseIds = bbCourses.results
+            if (bbMemberships && bbMemberships.results) {
+                // استخراج أسماء المقررات من memberships
+                const courseIds = bbMemberships.results
                     .filter(m => m.role === 'Student' && m.isAvailable !== false)
-                    .map(m => m.courseId);
+                    .map(m => m.courseId)
+                    .filter(Boolean);
 
-                // جلب أسماء المقررات عبر /learn/api/v1/courses (إن أمكن)
-                // ولكننا سنعتمد على الـ memberships فقط
-                extractedData.blackboard.courses = courseIds.filter(Boolean);
-                console.log(`✅ تم استخراج ${extractedData.blackboard.courses.length} مقرر من الـ API.`);
+                // محاولة جلب أسماء المقررات (قد نحتاج إلى استدعاء API إضافي)
+                // لكننا سنحتفظ بـ courseIds كحل مؤقت
+                extractedData.blackboard.courses = courseIds;
+                console.log(`✅ تم استخراج ${extractedData.blackboard.courses.length} مقرر.`);
             } else {
                 console.log("❌ لم يتم العثور على بيانات المقررات.");
                 throw new Error("تعذر جلب قائمة المقررات من Blackboard. تأكد من صحة بيانات الدخول.");
             }
 
-            // 4.2 استخراج الدرجات والواجبات
             if (bbGrades && bbGrades.results) {
                 extractedData.blackboard.assignments = bbGrades.results.map(g => ({
                     title: g.grade || g.name || 'عنصر دراسي',
@@ -162,78 +174,46 @@ export class SEUAutomation {
                 extractedData.blackboard.assignments = [];
             }
 
-            // 4.3 استخراج الملف الشخصي
             if (bbProfile) {
                 extractedData.banner.name = bbProfile.displayName || bbProfile.userName || 'طالب';
                 console.log(`✅ اسم الطالب: ${extractedData.banner.name}`);
             }
 
             // ============================================================
-            // الخطوة 5: جلب بيانات البانر (HTML Scraping)
+            // الخطوة 6: محاولة جلب بيانات البانر (HTML Scraping)
             // ============================================================
-            console.log("⚡ جاري محاولة جلب بيانات البانر عبر HTML Scraping...");
-
             try {
-                // إنشاء صفحة جديدة في نفس السياق (للاستفادة من جلسة SSO)
+                console.log("⚡ محاولة جلب بيانات البانر...");
                 const bannerPage = await context.newPage();
-
-                // 5.1 جلب الملف الشخصي من Banner SSB
                 await bannerPage.goto('https://bannservices.seu.edu.sa/StudentSelfService/ssb/studentProfile', {
                     waitUntil: 'domcontentloaded',
                     timeout: 30000
                 });
                 await bannerPage.waitForTimeout(5000);
 
-                const bannerProfile = await bannerPage.evaluate(() => {
-                    // استخراج البيانات من HTML باستخدام تعابير Regex أو DOM
+                const bannerData = await bannerPage.evaluate(() => {
                     const bodyText = document.body.innerText;
-
-                    // محاولة استخراج GPA
                     const gpaMatch = bodyText.match(/GPA:\s*([\d.]+)/i) || bodyText.match(/معدل:\s*([\d.]+)/i);
                     const gpa = gpaMatch ? gpaMatch[1] : null;
-
-                    // محاولة استخراج الاسم
                     const nameMatch = bodyText.match(/Name:\s*([^\n]+)/i) || bodyText.match(/الاسم:\s*([^\n]+)/i);
                     const name = nameMatch ? nameMatch[1].trim() : null;
-
-                    // محاولة استخراج الكلية والتخصص
-                    const collegeMatch = bodyText.match(/College:\s*([^\n]+)/i) || bodyText.match(/الكلية:\s*([^\n]+)/i);
-                    const majorMatch = bodyText.match(/Major:\s*([^\n]+)/i) || bodyText.match(/التخصص:\s*([^\n]+)/i);
-
-                    return {
-                        gpa,
-                        name,
-                        college: collegeMatch ? collegeMatch[1].trim() : null,
-                        major: majorMatch ? majorMatch[1].trim() : null
-                    };
+                    return { gpa, name };
                 });
 
-                if (bannerProfile.gpa) {
-                    extractedData.banner.gpa = bannerProfile.gpa;
-                    console.log(`✅ تم جلب المعدل من البانر: ${bannerProfile.gpa}`);
+                if (bannerData.gpa) {
+                    extractedData.banner.gpa = bannerData.gpa;
+                    console.log(`✅ تم جلب المعدل من البانر: ${bannerData.gpa}`);
                 }
-
-                if (bannerProfile.name) {
-                    extractedData.banner.name = bannerProfile.name;
+                if (bannerData.name) {
+                    extractedData.banner.name = bannerData.name;
                 }
-
-                if (bannerProfile.college) {
-                    extractedData.banner.college = bannerProfile.college;
-                }
-
-                if (bannerProfile.major) {
-                    extractedData.banner.major = bannerProfile.major;
-                }
-
                 await bannerPage.close();
-
             } catch (e) {
-                console.log("⚠️ تعذر جلب بيانات البانر عبر HTML Scraping:", e.message);
-                // نترك البيانات الافتراضية
+                console.log("⚠️ تعذر جلب بيانات البانر:", e.message);
             }
 
             // ============================================================
-            // الخطوة 6: التحقق النهائي من صحة البيانات
+            // الخطوة 7: التحقق النهائي
             // ============================================================
             if (extractedData.blackboard.courses.length === 0) {
                 throw new Error("❌ فشل في جلب المقررات من Blackboard. تأكد من صحة بيانات الدخول وأن لديك مقررات مسجلة.");
@@ -246,6 +226,10 @@ export class SEUAutomation {
             console.error("❌ فشل أثناء الأتمتة:", err.message);
             throw new Error(`فشلت المزامنة: ${err.message}`);
         } finally {
+            // إلغاء جميع الطلبات المعلقة لتجنب TargetClosedError
+            try {
+                await page.unrouteAll({ behavior: 'ignoreErrors' });
+            } catch (e) { /* تجاهل */ }
             await browser.close();
         }
     }
