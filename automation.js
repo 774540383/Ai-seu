@@ -21,18 +21,18 @@ export class SEUAutomation {
 
     try {
       console.log("⚡ جاري فتح بوابة الدخول الموحد...");
-      await page.goto('https://sso.seu.edu.sa', { waitUntil: 'networkidle2', timeout: 60000 });
+      await page.goto('https://sso.seu.edu.sa', { waitUntil: 'networkidle', timeout: 60000 });
       await page.waitForSelector('#username, input[name="username"]', { timeout: 60000 });
       
       await page.fill('#username', this.username);
       await page.fill('#password', this.password);
       await page.click('button[type="submit"]');
-      await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 });
+      await page.waitForNavigation({ waitUntil: 'networkidle', timeout: 60000 });
       console.log("✅ تم تسجيل الدخول بنجاح");
 
       console.log("⚡ جاري سحب بيانات البانر...");
       await page.goto('https://bannservices.seu.edu.sa/StudentRegistrationSsb/ssb/registration', { 
-        waitUntil: 'networkidle2', 
+        waitUntil: 'networkidle', 
         timeout: 60000 
       });
       
@@ -50,7 +50,7 @@ export class SEUAutomation {
 
       console.log("⚡ جاري فتح البلاك بورد وسحب المقررات...");
       await page.goto('https://lms.seu.edu.sa/webapps/ultra/', { 
-        waitUntil: 'networkidle2', 
+        waitUntil: 'networkidle', 
         timeout: 60000 
       });
       await page.waitForSelector('a[js-route="courses"]', { timeout: 60000 });
