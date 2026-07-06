@@ -21,29 +21,85 @@ export class SEUAutomation {
 
     try {
       console.log("⚡ جاري فتح بوابة الدخول الموحد...");
-
-      // 1. انتقل إلى SSO وانتظر تحميل الصفحة الأساسية
       await page.goto('https://sso.seu.edu.sa', { waitUntil: 'load', timeout: 60000 });
 
-      // 2. انتظر ظهور حقل اسم المستخدم المرئي (وليس المخفي)
-      await page.waitForSelector('input[name="username"]:not([type="hidden"])', {
-        state: 'visible',
-        timeout: 60000
+      // --- الخطوة الذكية: البحث عن الحقول المرئية ديناميكياً ---
+      console.log("⏳ جاري البحث عن حقول الدخول المرئية...");
+
+      // انتظر حتى تظهر أي حقول إدخال مرئية
+      await page.waitForFunction(
+        () => {
+          const inputs = Array.from(document.querySelectorAll('input'));
+          return inputs.some(inp => inp.offsetParent !== null && inp.type !== 'hidden');
+        },
+        { timeout: 60000 }
+      );
+
+      // استخدم evaluate لاستخراج المحددات الصحيحة للحقول المرئية
+      const fieldSelectors = await page.evaluate(() => {
+        const allInputs = Array.from(document.querySelectorAll('input'));
+        // تصفية الحقول المرئية (غير المخفية)
+        const visibleInputs = allInputs.filter(inp => inp.offsetParent !== null && inp.type !== 'hidden');
+
+        let usernameSelector = null;
+        let passwordSelector = null;
+
+        // محاولة العثور على حقل اسم المستخدم (يبحث في name, id, placeholder)
+        const usernameKeywords = ['user', 'email', 'login', 'username', 'uid', 'mail'];
+        for (const inp of visibleInputs) {
+          if (inp.type === 'password') continue; // نستثني كلمة المرور
+          const attrs = [inp.name, inp.id, inp.placeholder, inp.className].join(' ').toLowerCase();
+          if (usernameKeywords.some(kw => attrs.includes(kw))) {
+            usernameSelector = `#${inp.id}` || `[name="${inp.name}"]`;
+            break;
+          }
+        }
+        // إذا لم نجد، نأخذ أول حقل نصي visible
+        if (!usernameSelector) {
+          const firstText = visibleInputs.find(inp => inp.type === 'text' || inp.type === 'email');
+          if (firstText) {
+            usernameSelector = `#${firstText.id}` || `[name="${firstText.name}"]`;
+          }
+        }
+
+        // حقل كلمة المرور
+        const passwordInput = visibleInputs.find(inp => inp.type === 'password');
+        if (passwordInput) {
+          passwordSelector = `#${passwordInput.id}` || `[name="${passwordInput.name}"]`;
+        }
+
+        return { usernameSelector, passwordSelector };
       });
 
-      // 3. املأ البيانات باستخدام المحدد الذي يستبعد العناصر المخفية
-      await page.fill('input[name="username"]:not([type="hidden"])', this.username);
-      await page.fill('input[name="password"]:not([type="hidden"])', this.password);
+      console.log("🔍 المحددات التي تم اكتشافها:", fieldSelectors);
 
-      // 4. اضغط على زر الدخول
-      await page.click('button[type="submit"], input[type="submit"]');
+      if (!fieldSelectors.usernameSelector || !fieldSelectors.passwordSelector) {
+        throw new Error('لم يتم العثور على حقول الدخول المرئية. قد تكون الصفحة مختلفة.');
+      }
 
-      // 5. انتظر التوجيه بعد تسجيل الدخول
+      // تعبئة البيانات باستخدام المحددات المكتشفة
+      await page.fill(fieldSelectors.usernameSelector, this.username);
+      await page.fill(fieldSelectors.passwordSelector, this.password);
+
+      // البحث عن زر الدخول (يمكن أن يكون button أو input submit)
+      const submitBtn = await page.$('button[type="submit"], input[type="submit"]');
+      if (!submitBtn) {
+        // محاولة العثور على زر يحتوي على نص "تسجيل" أو "دخول"
+        const btn = await page.$('button:has-text("تسجيل"), button:has-text("دخول"), button:has-text("Login")');
+        if (btn) await btn.click();
+        else throw new Error('لم يتم العثور على زر الدخول');
+      } else {
+        await submitBtn.click();
+      }
+
       await page.waitForNavigation({ waitUntil: 'load', timeout: 60000 });
 
       console.log("✅ تم تسجيل الدخول بنجاح");
 
-      // ---- جلب بيانات البانر ----
+      // ---- باقي الكود لجلب البيانات من البانر والبلاك بورد (نفس الكود السابق) ----
+      // ... (يمكنك نسخه من الإصدارات السابقة أو تركه كما هو)
+      // ولكني سأضيفه للاكتمال
+
       console.log("⚡ جاري سحب بيانات البانر...");
       await page.goto('https://bannservices.seu.edu.sa/StudentRegistrationSsb/ssb/registration', {
         waitUntil: 'load',
@@ -63,7 +119,6 @@ export class SEUAutomation {
       });
       extractedData.banner = bannerData;
 
-      // ---- جلب بيانات البلاك بورد ----
       console.log("⚡ جاري فتح البلاك بورد وسحب المقررات...");
       await page.goto('https://lms.seu.edu.sa/webapps/ultra/', {
         waitUntil: 'load',
@@ -98,6 +153,9 @@ export class SEUAutomation {
       console.log("✅ تم استخراج البيانات بنجاح.");
     } catch (err) {
       console.error("❌ فشل أثناء الأتمتة:", err);
+      // طباعة رابط الصفحة الحالية للمساعدة في التصحيح
+      const url = page.url();
+      console.log("📌 الصفحة الحالية:", url);
       throw err;
     } finally {
       await browser.close();
