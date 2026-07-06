@@ -27,21 +27,17 @@ export class SEUAutomation {
       console.log("⚡ جاري فتح Blackboard...");
       await page.goto('https://lms.seu.edu.sa', { waitUntil: 'domcontentloaded', timeout: 60000 });
 
-      // انتظر التوجيه إلى SSO
       await page.waitForURL(/sso\.seu\.edu\.sa/, { timeout: 60000 });
       console.log("✅ تم التوجيه إلى SSO");
 
-      // انتظر ظهور حقول الدخول
       await page.waitForSelector('#usernameUserInput, #username, input[name="username"]', {
         state: 'visible',
         timeout: 60000
       });
 
-      // تعبئة البيانات
       await page.fill('#usernameUserInput', this.username);
       await page.fill('#password', this.password);
 
-      // الضغط على زر الدخول
       const submitBtn = await page.$('button[type="submit"]');
       if (submitBtn) {
         await submitBtn.click();
@@ -49,133 +45,132 @@ export class SEUAutomation {
         await page.press('#password', 'Enter');
       }
 
-      // انتظر العودة إلى Blackboard
       await page.waitForURL(/lms\.seu\.edu\.sa/, { timeout: 60000 });
       console.log("✅ تم العودة إلى Blackboard");
 
-      // انتظر تحميل المحتوى الديناميكي (واجهة Ultra)
+      // انتظر تحميل الصفحة بالكامل
       await page.waitForTimeout(5000);
 
       // ============================================================
-      // الخطوة 2: استخراج المقررات الدراسية الحقيقية
+      // الخطوة 2: استخدام API الداخلية لجلب المقررات والدرجات
       // ============================================================
-      console.log("⚡ جاري استخراج المقررات الدراسية...");
+      console.log("⚡ جاري جلب البيانات عبر API الداخلية...");
 
-      // محاولة العثور على عناصر المقررات في واجهة Ultra
-      // Blackboard Ultra يستخدم class مثل: .course-card, .course-item, .course-title, .course-name
-      const courseSelectors = [
-        '.course-card',
-        '.course-item',
-        '.course-title',
-        '.course-name',
-        '.course-element-title',
-        'div[data-testid="course-card"]',
-        'li[data-testid="course-list-item"]',
-        '.course-list-item'
-      ];
-
+      // استدعاء API المقررات
       let courses = [];
-
-      for (const selector of courseSelectors) {
-        try {
-          await page.waitForSelector(selector, { timeout: 10000 });
-          const courseElements = await page.$$(selector);
-          if (courseElements.length > 0) {
-            courses = await page.evaluate((sel) => {
-              return Array.from(document.querySelectorAll(sel))
-                .map(el => el.innerText.trim())
-                .filter(text => text.length > 0 && text.length < 200);
-            }, selector);
-            if (courses.length > 0) break;
-          }
-        } catch (e) {
-          // استمر في المحاولة مع المحدد التالي
-        }
-      }
-
-      // إذا لم نعثر على المقررات، نحاول الانتقال إلى صفحة "المقررات" مباشرة
-      if (courses.length === 0) {
-        console.log("⚠️ لم يتم العثور على المقررات في الصفحة الرئيسية، جاري الانتقال إلى صفحة المقررات...");
-        
-        // محاولة النقر على رابط "المقررات" أو "Courses"
-        try {
-          const coursesLink = await page.$('a:has-text("Courses"), a:has-text("المقررات"), a[js-route="courses"]');
-          if (coursesLink) {
-            await coursesLink.click();
-            await page.waitForTimeout(5000);
-            
-            // إعادة محاولة البحث في صفحة المقررات
-            for (const selector of courseSelectors) {
-              try {
-                await page.waitForSelector(selector, { timeout: 10000 });
-                const courseElements = await page.$$(selector);
-                if (courseElements.length > 0) {
-                  courses = await page.evaluate((sel) => {
-                    return Array.from(document.querySelectorAll(sel))
-                      .map(el => el.innerText.trim())
-                      .filter(text => text.length > 0 && text.length < 200);
-                  }, selector);
-                  if (courses.length > 0) break;
-                }
-              } catch (e) {}
-            }
-          }
-        } catch (e) {
-          console.log("⚠️ تعذر الانتقال إلى صفحة المقررات");
-        }
-      }
-
-      // إذا لم نعثر على مقررات، نأخذ النص من الصفحة (كحل أخير)
-      if (courses.length === 0) {
-        console.log("⚠️ جاري استخراج النص العام من الصفحة...");
-        const allText = await page.evaluate(() => document.body.innerText);
-        const lines = allText.split('\n').filter(line => line.trim().length > 0);
-        // نأخذ الأسطر التي قد تحتوي على أسماء مقررات (تجاهل الأسطر القصيرة جداً)
-        courses = lines.filter(line => 
-          line.length > 5 && 
-          !line.includes('Skip to main content') &&
-          !line.includes('Institution Page') &&
-          !line.includes('Activity') &&
-          !line.includes('Calendar') &&
-          !line.includes('Messages') &&
-          !line.includes('Grades') &&
-          !line.includes('Tools')
-        ).slice(0, 15);
-      }
-
-      console.log(`✅ تم العثور على ${courses.length} مقرر`);
-      courses.forEach((c, i) => console.log(`   ${i+1}. ${c}`));
-
-      // ============================================================
-      // الخطوة 3: استخراج الواجبات والدرجات
-      // ============================================================
-      console.log("⚡ جاري استخراج الواجبات والدرجات...");
-
       let assignments = [];
-      let grades = [];
+      let gpa = 'N/A';
+      let studentName = 'طالب';
 
-      // محاولة الوصول إلى صفحة الدرجات
       try {
-        const gradesLink = await page.$('a:has-text("Grades"), a:has-text("الدرجات"), a[js-route="grades"]');
-        if (gradesLink) {
-          await gradesLink.click();
-          await page.waitForTimeout(5000);
-          
-          // استخراج الواجبات من صفحة الدرجات
-          const gradeItems = await page.evaluate(() => {
-            const items = Array.from(document.querySelectorAll('.grade-item, .grade-row, tr'));
-            return items.map(el => el.innerText.trim()).filter(text => text.length > 0);
-          });
-          
-          if (gradeItems.length > 0) {
-            assignments = gradeItems.slice(0, 10).map(text => ({ title: text, dueDate: 'غير محدد' }));
+        // محاولة جلب المقررات عبر API
+        const coursesData = await page.evaluate(async () => {
+          try {
+            const response = await fetch('/learn/api/v3/courses', {
+              headers: { 'Accept': 'application/json' }
+            });
+            if (!response.ok) throw new Error('API request failed');
+            const data = await response.json();
+            return data.results || [];
+          } catch (e) {
+            return [];
           }
+        });
+
+        if (coursesData.length > 0) {
+          courses = coursesData.map(c => c.name || c.courseId || 'مقرر');
+          console.log(`✅ تم جلب ${courses.length} مقرر عبر API`);
+        } else {
+          console.log("⚠️ لم يتم العثور على مقررات عبر API");
         }
+
+        // محاولة جلب الدرجات والواجبات عبر API
+        const gradesData = await page.evaluate(async () => {
+          try {
+            const response = await fetch('/learn/api/v1/users/me/grades', {
+              headers: { 'Accept': 'application/json' }
+            });
+            if (!response.ok) throw new Error('API request failed');
+            const data = await response.json();
+            return data.results || [];
+          } catch (e) {
+            return [];
+          }
+        });
+
+        if (gradesData.length > 0) {
+          assignments = gradesData.map(g => ({
+            title: g.name || g.grade || 'واجب',
+            dueDate: g.dueDate || 'قريباً'
+          }));
+          console.log(`✅ تم جلب ${assignments.length} واجب/درجة عبر API`);
+        } else {
+          console.log("⚠️ لم يتم العثور على درجات عبر API");
+        }
+
+        // محاولة جلب اسم الطالب
+        const profileData = await page.evaluate(async () => {
+          try {
+            const response = await fetch('/learn/api/v1/users/me', {
+              headers: { 'Accept': 'application/json' }
+            });
+            if (!response.ok) throw new Error('API request failed');
+            const data = await response.json();
+            return data.displayName || data.userName || 'طالب';
+          } catch (e) {
+            return 'طالب';
+          }
+        });
+
+        studentName = profileData;
+
       } catch (e) {
-        console.log("⚠️ تعذر الوصول إلى صفحة الدرجات");
+        console.log("⚠️ حدث خطأ أثناء جلب البيانات عبر API:", e.message);
       }
 
-      // إذا لم نجد واجبات، نستخدم بيانات افتراضية
+      // ============================================================
+      // الخطوة 3: إذا فشلت API، نستخدم DOM كحل بديل
+      // ============================================================
+      if (courses.length === 0) {
+        console.log("⚡ جاري محاولة استخراج البيانات من DOM كحل بديل...");
+
+        // محاولة العثور على عناصر المقررات في DOM
+        const courseSelectors = [
+          '.course-card', '.course-item', '.course-title',
+          '.course-name', '.course-element-title',
+          'div[data-testid="course-card"]',
+          'li[data-testid="course-list-item"]'
+        ];
+
+        for (const selector of courseSelectors) {
+          try {
+            await page.waitForSelector(selector, { timeout: 5000 });
+            const elements = await page.$$(selector);
+            if (elements.length > 0) {
+              courses = await page.evaluate((sel) => {
+                return Array.from(document.querySelectorAll(sel))
+                  .map(el => el.innerText.trim())
+                  .filter(text => text.length > 0 && text.length < 200);
+              }, selector);
+              if (courses.length > 0) break;
+            }
+          } catch (e) {}
+        }
+
+        // إذا لم نعثر، نأخذ النص من الصفحة ونقوم بتصفية الكلمات المفتاحية
+        if (courses.length === 0) {
+          const allText = await page.evaluate(() => document.body.innerText);
+          const lines = allText.split('\n').filter(line => line.trim().length > 0);
+          // نستبعد الأسطر الشائعة غير المرتبطة بالمقررات
+          const excludeWords = ['Skip', 'Institution', 'Activity', 'Calendar', 'Messages', 'Grades', 'Tools', 'Sign Out', 'Privacy', 'Accessibility', 'سداد', 'اعزائنا', 'يرجى', 'حذف', 'تسجيل', 'تجاهل', 'Help', 'device', 'session', 'Continue'];
+          courses = lines.filter(line => 
+            !excludeWords.some(word => line.includes(word)) &&
+            line.length > 5
+          ).slice(0, 20);
+        }
+      }
+
+      // إذا لم نجد واجبات، نضع قيمة افتراضية
       if (assignments.length === 0) {
         assignments = [{ title: "لا توجد واجبات حالياً", dueDate: "-" }];
       }
@@ -216,6 +211,11 @@ export class SEUAutomation {
         assignments,
         announcements: ["مرحباً بكم في الفصل الدراسي الجديد"]
       };
+
+      // تحديث اسم الطالب إذا تم جلبه
+      if (studentName !== 'طالب') {
+        extractedData.banner.name = studentName;
+      }
 
       console.log("✅ تم استخراج جميع البيانات بنجاح.");
 
